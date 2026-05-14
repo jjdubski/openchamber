@@ -268,6 +268,9 @@ export const VSCodeLayout: React.FC = () => {
   /** Collect root session IDs and all descendants (subagent sessions). */
   const collectSessionIdsWithDescendants = React.useCallback(
     (allSessions: Session[], rootSessions: Session[]): string[] => {
+      const byId = new Map<string, Session>();
+      for (const session of allSessions) byId.set(session.id, session);
+
       const childrenMap = new Map<string, string[]>();
       for (const session of allSessions) {
         const parentID = session.parentID;
@@ -284,6 +287,8 @@ export const VSCodeLayout: React.FC = () => {
         visited.add(sessionId);
         const children = childrenMap.get(sessionId) ?? [];
         for (const childId of children) {
+          const child = byId.get(childId);
+          if (child?.time?.archived) continue; // skip already-archived children
           ids.add(childId);
           addDescendants(childId, visited);
         }
