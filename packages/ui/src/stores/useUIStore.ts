@@ -9,7 +9,7 @@ import { getStoredMobileKeyboardMode, type MobileKeyboardMode } from '@/lib/mobi
 
 export type MainTab = 'chat' | 'plan' | 'git' | 'diff' | 'terminal' | 'files';
 export type RightSidebarTab = 'git' | 'files' | 'context';
-export type ContextPanelMode = 'diff' | 'file' | 'context' | 'plan' | 'chat' | 'preview';
+export type ContextPanelMode = 'diff' | 'file' | 'context' | 'plan' | 'chat' | 'preview' | 'browser';
 export type MermaidRenderingMode = 'svg' | 'ascii';
 export type UserMessageRenderingMode = 'markdown' | 'plain';
 export type ChatRenderMode = 'sorted' | 'live';
@@ -24,6 +24,7 @@ type ContextPanelTab = {
   targetPath: string | null;
   dedupeKey: string;
   label: string | null;
+  readOnly: boolean;
   touchedAt: number;
 };
 
@@ -32,6 +33,7 @@ type ContextPanelTabDescriptor = {
   targetPath?: string | null;
   dedupeKey?: string | null;
   label?: string | null;
+  readOnly?: boolean;
 };
 
 type ContextPanelDirectoryState = {
@@ -201,6 +203,7 @@ const createContextPanelTab = (descriptor: ContextPanelTabDescriptor): ContextPa
     targetPath: normalizedTargetPath,
     dedupeKey,
     label: normalizeContextTabLabel(descriptor.label),
+    readOnly: descriptor.readOnly === true,
     touchedAt: Date.now(),
   };
 };
@@ -239,10 +242,11 @@ const sanitizeContextPanelTabs = (tabs: unknown): ContextPanelTab[] => {
       targetPath?: unknown;
       dedupeKey?: unknown;
       label?: unknown;
+      readOnly?: unknown;
       touchedAt?: unknown;
     };
 
-    if (candidate.mode !== 'diff' && candidate.mode !== 'file' && candidate.mode !== 'context' && candidate.mode !== 'plan' && candidate.mode !== 'chat' && candidate.mode !== 'preview') {
+    if (candidate.mode !== 'diff' && candidate.mode !== 'file' && candidate.mode !== 'context' && candidate.mode !== 'plan' && candidate.mode !== 'chat' && candidate.mode !== 'preview' && candidate.mode !== 'browser') {
       continue;
     }
 
@@ -264,6 +268,7 @@ const sanitizeContextPanelTabs = (tabs: unknown): ContextPanelTab[] => {
       targetPath,
       dedupeKey,
       label: normalizeContextTabLabel(typeof candidate.label === 'string' ? candidate.label : null),
+      readOnly: candidate.readOnly === true,
       touchedAt: typeof candidate.touchedAt === 'number' && Number.isFinite(candidate.touchedAt)
         ? candidate.touchedAt
         : Date.now(),
@@ -386,6 +391,17 @@ const reorderContextPanelTabs = (
   };
 };
 
+const setContextPanelTabTargetPath = (
+  current: ContextPanelDirectoryState,
+  tabID: string,
+  targetPath: string,
+): ContextPanelDirectoryState => ({
+  ...current,
+  tabs: current.tabs.map((tab) =>
+    tab.id === tabID ? { ...tab, targetPath } : tab,
+  ),
+});
+
 const sanitizeContextPanelByDirectory = (
   value: unknown,
 ): Record<string, ContextPanelDirectoryState> => {
@@ -481,6 +497,7 @@ interface UIStore {
   bottomTerminalHeight: number;
   hasManuallyResizedBottomTerminal: boolean;
   isSessionSwitcherOpen: boolean;
+  isSessionDropdownOpen: boolean;
   activeMainTab: MainTab;
   mainTabGuard: MainTabGuard | null;
   sidebarOpenBeforeFullscreenTab: boolean | null;
@@ -563,6 +580,7 @@ interface UIStore {
 
   showTerminalQuickKeysOnDesktop: boolean;
   persistChatDraft: boolean;
+  showOpenCodeUpdateNotifications: boolean;
   inputSpellcheckEnabled: boolean;
   wideChatLayoutEnabled: boolean;
   showToolFileIcons: boolean;
@@ -595,6 +613,8 @@ interface UIStore {
   openContextOverview: (directory: string) => void;
   openContextPlan: (directory: string) => void;
   openContextPreview: (directory: string, url: string) => void;
+  openContextBrowser: (directory: string, url?: string) => void;
+  setContextPanelTabTargetPath: (directory: string, tabID: string, targetPath: string) => void;
   setActiveContextPanelTab: (directory: string, tabID: string) => void;
   reorderContextPanelTabs: (directory: string, activeTabID: string, overTabID: string) => void;
   closeContextPanelTab: (directory: string, tabID: string) => void;
@@ -606,6 +626,7 @@ interface UIStore {
   setBottomTerminalExpanded: (expanded: boolean) => void;
   setBottomTerminalHeight: (height: number) => void;
   setSessionSwitcherOpen: (open: boolean) => void;
+  setSessionDropdownOpen: (open: boolean) => void;
   setActiveMainTab: (tab: MainTab) => void;
   setMainTabGuard: (guard: MainTabGuard | null) => void;
   setPendingDiffFile: (filePath: string | null) => void;
@@ -689,6 +710,7 @@ interface UIStore {
   setSummaryLength: (value: number) => void;
   setMaxLastMessageLength: (value: number) => void;
   setPersistChatDraft: (value: boolean) => void;
+  setShowOpenCodeUpdateNotifications: (value: boolean) => void;
   setInputSpellcheckEnabled: (value: boolean) => void;
   setWideChatLayoutEnabled: (value: boolean) => void;
   setShowToolFileIcons: (value: boolean) => void;
@@ -736,6 +758,7 @@ export const useUIStore = create<UIStore>()(
         bottomTerminalHeight: 300,
         hasManuallyResizedBottomTerminal: false,
         isSessionSwitcherOpen: false,
+        isSessionDropdownOpen: false,
         activeMainTab: 'chat',
         mainTabGuard: null,
         sidebarOpenBeforeFullscreenTab: null,
@@ -812,6 +835,7 @@ export const useUIStore = create<UIStore>()(
 
         showTerminalQuickKeysOnDesktop: false,
         persistChatDraft: true,
+        showOpenCodeUpdateNotifications: true,
         inputSpellcheckEnabled: false,
         wideChatLayoutEnabled: false,
         showToolFileIcons: true,
@@ -1021,6 +1045,33 @@ export const useUIStore = create<UIStore>()(
             targetPath: normalizedUrl,
             dedupeKey: normalizedUrl,
             label,
+          });
+        },
+        openContextBrowser: (directory, url = '') => {
+          const normalizedDirectory = normalizeDirectoryPath((directory || '').trim());
+          if (!normalizedDirectory) return;
+          const targetUrl = typeof url === 'string' && url.trim().length > 0 ? url.trim() : '';
+          get().openContextPanelTab(normalizedDirectory, {
+            mode: 'browser',
+            targetPath: targetUrl,
+            dedupeKey: 'desktop-browser',
+            label: 'Browser',
+          });
+        },
+
+        setContextPanelTabTargetPath: (directory, tabID, targetPath) => {
+          const normalizedDirectory = normalizeDirectoryPath((directory || '').trim());
+          const normalizedTabID = (tabID || '').trim();
+          if (!normalizedDirectory || !normalizedTabID) return;
+          set((state) => {
+            const current = state.contextPanelByDirectory[normalizedDirectory];
+            if (!current) return state;
+            return {
+              contextPanelByDirectory: {
+                ...state.contextPanelByDirectory,
+                [normalizedDirectory]: setContextPanelTabTargetPath(current, normalizedTabID, targetPath),
+              },
+            };
           });
         },
 
@@ -1237,6 +1288,10 @@ export const useUIStore = create<UIStore>()(
 
         setSessionSwitcherOpen: (open) => {
           set({ isSessionSwitcherOpen: open });
+        },
+
+        setSessionDropdownOpen: (open) => {
+          set({ isSessionDropdownOpen: open });
         },
 
         setMainTabGuard: (guard) => {
@@ -1800,6 +1855,9 @@ export const useUIStore = create<UIStore>()(
         setPersistChatDraft: (value) => {
           set({ persistChatDraft: value });
         },
+        setShowOpenCodeUpdateNotifications: (value) => {
+          set({ showOpenCodeUpdateNotifications: value });
+        },
         setInputSpellcheckEnabled: (value) => {
           set({ inputSpellcheckEnabled: value });
         },
@@ -2026,6 +2084,7 @@ export const useUIStore = create<UIStore>()(
           summaryLength: state.summaryLength,
           maxLastMessageLength: state.maxLastMessageLength,
           persistChatDraft: state.persistChatDraft,
+          showOpenCodeUpdateNotifications: state.showOpenCodeUpdateNotifications,
           inputSpellcheckEnabled: state.inputSpellcheckEnabled,
           wideChatLayoutEnabled: state.wideChatLayoutEnabled,
           showToolFileIcons: state.showToolFileIcons,
